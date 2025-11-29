@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantum Bridge Interface</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Courier+New:wght@400;700&display=swap');
+        body { font-family: 'Courier New', monospace; background-color: #050505; color: #00ff41; }
+        
+        /* Matrix-style aesthetic */
+        .btn-primary { background: #008f11; color: black; font-weight: bold; border: 1px solid #00ff41; transition: all 0.3s ease; }
+        .btn-primary:hover:not(:disabled) { background: #00ff41; box-shadow: 0 0 15px #00ff41; cursor: pointer; }
+        .btn-primary:disabled { background: #1a1a1a; color: #004400; border-color: #004400; cursor: not-allowed; }
+        
+        .glass-panel { 
+            background: rgba(0, 20, 0, 0.8); 
+            border: 1px solid #00ff41; 
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.1);
+        }
+
+        /* The Quantum Orb Animation */
+        .orb-container { display: flex; justify-content: center; align-items: center; height: 160px; }
+        .orb {
+            width: 100px; height: 100px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #fff, #00ff41, #000);
+            box-shadow: 0 0 30px #00ff41;
+            opacity: 0.5;
+            transition: all 0.5s ease;
+        }
+        .orb.active { animation: pulse 1s infinite alternate; box-shadow: 0 0 60px #00ff41; opacity: 1; }
+        @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.2); } }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-md mx-auto p-6 rounded-none glass-panel text-center">
+        <header class="mb-6">
+            <h1 class="text-2xl font-bold tracking-widest text-[#00ff41]">QUANTUM BRIDGE</h1>
+            <p class="text-xs text-green-800 mt-2">LINKED TO AVALANCHE FUJI TESTNET</p>
+        </header>
+
+        <main>
+            <div class="orb-container my-4">
+                <div id="orb" class="orb"></div>
+            </div>
+            
+            <div id="resultDisplay" class="text-6xl font-bold mb-8 text-white min-h-[70px]">--</div>
+
+            <div id="gameContainer" class="hidden">
+                 <button id="rollBtn" class="w-full py-4 px-4 mb-4 text-lg btn-primary tracking-widest">
+                     INITIATE SEQUENCE
+                 </button>
+            </div>
+
+            <div id="connectWalletContainer">
+                <button id="connectWalletBtn" class="w-full py-4 px-4 text-lg btn-primary tracking-widest">
+                    [ CONNECT TERMINAL ]
+                </button>
+            </div>
+            
+            <p id="walletAddress" class="text-green-900 mt-4 text-xs font-mono"></p>
+            <div id="messageArea" class="mt-4 text-center min-h-[24px]">
+                <p id="messageText" class="text-xs text-green-600">Waiting for user input...</p>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        const contractAddress = "0x9EE8B0D82778504d4902716985D0b6Cb2715a1Bc"; // YOUR CONTRACT
+        
+        // Minimal ABI for the Quantum Bridge
+        const contractABI = [
+            {"inputs": [],"name": "requestRoll","outputs": [],"stateMutability": "nonpayable","type": "function"},
+            {"inputs": [],"name": "isRolling","outputs": [{"internalType": "bool","name": "","type": "bool"}],"stateMutability": "view","type": "function"},
+            {"inputs": [],"name": "lastResult","outputs": [{"internalType": "uint256","name": "","type": "uint256"}],"stateMutability": "view","type": "function"}
+        ];
+
+        const fujiChainId = '0xa869'; // 43113
+
+        // --- DOM Elements ---
+        const connectWalletBtn = document.getElementById('connectWalletBtn');
+        const rollBtn = document.getElementById('rollBtn');
+        const walletAddressEl = document.getElementById('walletAddress');
+        const messageTextEl = document.getElementById('messageText');
+        const connectWalletContainer = document.getElementById('connectWalletContainer');
+        const gameContainer = document.getElementById('gameContainer');
+        const orb = document.getElementById('orb');
+        const resultDisplay = document.getElementById('resultDisplay');
+
+        // --- State ---
+        let currentAccount = null;
+        let contractInterface;
+
+        // --- Core Wallet Logic (Per your instructions) ---
+        
+        async function connectWallet() {
+            if (typeof window.ethereum === 'undefined') { return showMessage('MetaMask is not installed!', 'error'); }
+            try {
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                handleAccountsChanged(accounts);
+            } catch (error) {
+                console.error("Connection failed:", error);
+                showMessage('Connection rejected.', 'error');
+            }
+        }
+
+        function handleAccountsChanged(accounts) {
+            if (accounts.length === 0) {
+                currentAccount = null;
+                connectWalletContainer.classList.remove('hidden');
+                gameContainer.classList.add('hidden');
+                walletAddressEl.textContent = '';
+                showMessage('Terminal Disconnected.', 'info');
+            } else if (accounts[0] !== currentAccount) {
+                currentAccount = accounts[0];
+                connectWalletContainer.classList.add('hidden');
+                gameContainer.classList.remove('hidden');
+                walletAddressEl.textContent = `UPLINK: ${currentAccount.substring(0,6)}...${currentAccount.substring(currentAccount.length - 4)}`;
+                showMessage('Terminal Online. Ready.', 'success');
+                checkAndSwitchNetwork();
+            }
+        }
+
+        async function checkAndSwitchNetwork() {
+            try {
+                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                if (chainId !== fujiChainId) {
+                    await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: fujiChainId }] });
+                }
+            } catch (switchError) {
+                if (switchError.code === 4902) { await addFujiNetwork(); } 
+                else { showMessage('Switch to Avalanche Fuji Testnet.', 'error'); }
+            }
+        }
+
+        async function addFujiNetwork() {
+            try {
+                await window.ethereum.request({
+                    method: 'wallet_addEthereumChain',
+                    params: [{
+                        chainId: fujiChainId, chainName: 'Avalanche Fuji C-Chain',
+                        nativeCurrency: { name: 'AVAX', symbol: 'AVAX', decimals: 18 },
+                        rpcUrls: ['https://api.avax-test.network/ext/bc/C/rpc'],
+                        blockExplorerUrls: ['https://testnet.snowtrace.io/']
+                    }],
+                });
+            } catch (addError) { showMessage('Network Error.', 'error'); }
+        }
+
+        // --- Quantum Game Logic ---
+
+        async function initiateRoll() {
+            if (!contractInterface) return;
+            setLoading(true);
+            showMessage('Sign the request in MetaMask...', 'info');
+
+            // Encode the simple request function
+            const data = contractInterface.encodeFunctionData("requestRoll", []);
+
+            const txParams = {
+                from: currentAccount,
+                to: contractAddress,
+                data: data, // No value needed, just gas
+            };
+
+            try {
+                const txHash = await window.ethereum.request({ method: 'eth_sendTransaction', params: [txParams] });
+                showMessage('Request Sent. Waiting for Block Confirmation...', 'info');
+                
+                // 1. Wait for User's "Request" Transaction to be mined
+                const receipt = await waitForTransaction(txHash);
+                
+                if (receipt.status === '0x1') {
+                    // 2. Start Polling for the Oracle's Response
+                    showMessage('Accessing Quantum Vacuum...', 'info');
+                    orb.classList.add('active');
+                    pollForQuantumResult();
+                } else {
+                    showMessage('Transaction Failed.', 'error');
+                    setLoading(false);
+                }
+            } catch (error) {
+                console.error(error);
+                showMessage('Transaction Cancelled.', 'error');
+                setLoading(false);
+            }
+        }
+
+        // We poll the blockchain to see when the Python script finishes its job
+        async function pollForQuantumResult() {
+            const pollInterval = setInterval(async () => {
+                try {
+                    // Check isRolling status
+                    const isRollingData = contractInterface.encodeFunctionData("isRolling");
+                    const isRollingHex = await window.ethereum.request({ 
+                        method: 'eth_call', 
+                        params: [{ to: contractAddress, data: isRollingData }, 'latest'] 
+                    });
+                    
+                    // Decode result (Boolean)
+                    const isRolling = contractInterface.decodeFunctionResult("isRolling", isRollingHex)[0];
+
+                    if (isRolling === false) {
+                        // STOP Polling
+                        clearInterval(pollInterval);
+                        
+                        // GET THE RESULT
+                        const lastResultData = contractInterface.encodeFunctionData("lastResult");
+                        const lastResultHex = await window.ethereum.request({ 
+                            method: 'eth_call', 
+                            params: [{ to: contractAddress, data: lastResultData }, 'latest'] 
+                        });
+                        const result = contractInterface.decodeFunctionResult("lastResult", lastResultHex)[0];
+                        
+                        // Display
+                        orb.classList.remove('active');
+                        resultDisplay.textContent = result.toString();
+                        showMessage(`Quantum Waveform Collapsed: ${result}`, 'success');
+                        setLoading(false);
+                    }
+                } catch (e) {
+                    console.error("Polling error", e);
+                }
+            }, 2000); // Check every 2 seconds
+        }
+
+        // --- Utility Functions ---
+
+        function waitForTransaction(txHash) {
+            return new Promise((resolve) => {
+                const interval = setInterval(async () => {
+                    try {
+                        const receipt = await window.ethereum.request({ method: 'eth_getTransactionReceipt', params: [txHash] });
+                        if (receipt) { clearInterval(interval); resolve(receipt); }
+                    } catch(e) { console.error(e); }
+                }, 2000);
+            });
+        }
+
+        function setLoading(isLoading) {
+            rollBtn.disabled = isLoading;
+            if (isLoading) {
+                rollBtn.textContent = "PROCESSING...";
+                resultDisplay.textContent = "⏳";
+            } else {
+                rollBtn.textContent = "INITIATE SEQUENCE";
+            }
+        }
+
+        function showMessage(msg, type = 'info') {
+            messageTextEl.textContent = msg;
+            messageTextEl.classList.remove('text-green-600', 'text-red-500');
+            if(type === 'error') messageTextEl.classList.add('text-red-500');
+            else messageTextEl.classList.add('text-green-600');
+        }
+
+        // --- Initial Load ---
+        function init() {
+            contractInterface = new ethers.utils.Interface(contractABI);
+
+            if (typeof window.ethereum !== 'undefined') {
+                window.ethereum.on('accountsChanged', handleAccountsChanged);
+                window.ethereum.on('chainChanged', () => window.location.reload());
+                window.ethereum.request({ method: 'eth_accounts' })
+                    .then(handleAccountsChanged)
+                    .catch(err => console.error("Error fetching accounts:", err));
+            } else {
+                showMessage('MetaMask Required.', 'error');
+                connectWalletBtn.disabled = true;
+            }
+        }
+        
+        connectWalletBtn.addEventListener('click', connectWallet);
+        rollBtn.addEventListener('click', initiateRoll);
+        
+        init();
+    </script>
+</body>
+</html>
