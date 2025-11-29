@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Quantum Bridge</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+    <style>
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #0d0d0d;
+            color: #00ff41;
+            text-align: center;
+            padding-top: 50px;
+        }
+        h1 { text-shadow: 0 0 10px #00ff41; }
+        .container {
+            border: 2px solid #00ff41;
+            width: 400px;
+            margin: 0 auto;
+            padding: 20px;
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+        }
+        button {
+            background-color: #00ff41;
+            color: #000;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 20px;
+            font-family: inherit;
+            width: 100%;
+        }
+        button:hover { background-color: #fff; box-shadow: 0 0 15px #fff; }
+        button:disabled { background-color: #333; color: #555; cursor: not-allowed; box-shadow: none; }
+        
+        .hidden { display: none; }
+        #status { margin-top: 20px; font-size: 14px; color: #888; }
+        #result { font-size: 60px; margin-top: 20px; font-weight: bold; min-height: 80px; }
+        #walletAddress { font-size: 10px; color: #004400; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <h1>⚛️ QUANTUM ORACLE ⚛️</h1>
+    
+    <div class="container">
+        <p>STATUS: <span id="connectionStatus">DISCONNECTED</span></p>
+        
+        <div id="result">--</div>
+        
+        <div id="connectWalletContainer">
+            <button id="connectWalletBtn">[ CONNECT WALLET ]</button>
+        </div>
+
+        <div id="gameContainer" class="hidden">
+            <button id="rollBtn">[ INITIATE SEQUENCE ]</button>
+        </div>
+        
+        <p id="status">Waiting for uplink...</p>
+        <p id="walletAddress"></p>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        const contractAddress = "0x9EE8B0D82778504d4902716985D0b6Cb2715a1Bc";
+        const fujiChainId = '0xa869'; // 43113 in hex
+
+        // Exact ABI needed for Ethers Interface
+        const contractABI = [
+            "function requestRoll()",
+            "function isRolling() view returns (bool)",
+            "function lastResult() view returns (uint256)"
+        ];
+
+        // --- DOM Elements ---
+        const connectWalletBtn = document.getElementById('connectWalletBtn');
+        const rollBtn = document.getElementById('rollBtn');
+        const connectWalletContainer = document.getElementById('connectWalletContainer');
+        const gameContainer = document.getElementById('gameContainer');
+        const statusEl = document.getElementById('status');
+        const resultEl = document.getElementById('result');
+        const connectionStatusEl = document.getElementById('connectionStatus');
+        const walletAddressEl = document.getElementById('walletAddress');
+
+        // --- State ---
+        let currentAccount = null;
+        let contractInterface;
+
+        // --- 1. Wallet Logic (COPIED EXACTLY FROM COIN FLIP) ---
+
+        async function connectWallet() {
+            if (typeof window.ethereum === 'undefined') { 
+                statusEl.innerText = "MetaMask not installed!"; 
+                return; 
+            }
+            try {
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                handleAccountsChanged(accounts);
+            } catch (error) {
+                console.error("Connection failed:", error);
+                statusEl.innerText = "Connection rejected.";
+            }
+        }
+
+        function handleAccountsChanged(accounts) {
+            if (accounts.length === 0) {
+                currentAccount = null;
+                connectWalletContainer.classList.remove('hidden');
+                gameContainer.classList.add('hidden');
+                connectionStatusEl.innerText = "DISCONNECTED";
+                walletAddressEl.innerText = "";
+            } else if (accounts[0] !== currentAccount) {
+                currentAccount = accounts[0];
+                connectWalletContainer.classList.add('hidden');
+                gameContainer.classList.remove('hidden');
+                connectionStatusEl.innerText = "ONLINE";
+                connectionStatusEl.style.color = "#00ff41";
+                walletAddressEl.innerText = `ID: ${currentAccount}`;
+                
+                checkAndSwitchNetwork();
+            }
+        }
+
+        async function checkAndSwitchNetwork() {
+            try {
+                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                if (chainId !== fujiChainId) {
+                    await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: fujiChainId }] });
+                }
+            } catch (error) {
+                // Add Fuji if missing
+                if (error.code === 4902) {
+                    await window.ethereum.request({
+                        method: 'wallet_addEthereumChain',
+                        params: [{
+                            chainId: fujiChainId, chainName: 'Avalanche Fuji C-Chain',
+                            nativeCurrency: { name: 'AVAX', symbol: 'AVAX', decimals: 18 },
+                            rpcUrls: ['https://api.avax-test.network/ext/bc/C/rpc'],
+                            blockExplorerUrls: ['https://testnet.snowtrace.io/']
+                        }],
+                    });
+                }
+            }
+        }
+
+        // --- 2. Game Logic (Adapted for Dice) ---
+
+        async function initiateRoll() {
+            if (!currentAccount) return;
+            
+            // Lock UI
+            rollBtn.disabled = true;
+            statusEl.innerText = "Sign Request in MetaMask...";
+            resultEl.innerText = "⏳";
+
+            // Prepare Data using Ethers Interface (Just like Coin Flip)
+            const data = contractInterface.encodeFunctionData("requestRoll", []);
+            
+            const txParams = {
+                from: currentAccount,
+                to: contractAddress,
+                data: data
+            };
+
+            try {
+                // Send Transaction
+                const txHash = await window.ethereum.request({ method: 'eth_sendTransaction', params: [txParams] });
+                statusEl.innerText = "Request Sent. Waiting for Block...";
+                
+                // Wait for confirmation
+                const receipt = await waitForTransaction(txHash);
+                
+                if (receipt.status === '0x1') {
+                    statusEl.innerText = "Confirmed. Waiting for Oracle...";
+                    // Start Polling for Python Response
+                    pollForQuantumResult();
+                } else {
+                    throw new Error("Transaction Failed");
+                }
+            } catch (error) {
+                console.error(error);
+                statusEl.innerText = "Transaction Failed or Cancelled.";
+                resultEl.innerText = "❌";
+                rollBtn.disabled = false;
+            }
+        }
+
+        // --- 3. Polling Logic (The 'Wait for Python' part) ---
+
+        async function pollForQuantumResult() {
+            const pollInterval = setInterval(async () => {
+                try {
+                    // Check 'isRolling'
+                    const isRollingData = contractInterface.encodeFunctionData("isRolling");
+                    const isRollingHex = await window.ethereum.request({ 
+                        method: 'eth_call', 
+                        params: [{ to: contractAddress, data: isRollingData }, 'latest'] 
+                    });
+                    const isRolling = contractInterface.decodeFunctionResult("isRolling", isRollingHex)[0];
+
+                    if (isRolling === false) {
+                        clearInterval(pollInterval);
+                        
+                        // Get Result
+                        const lastResultData = contractInterface.encodeFunctionData("lastResult");
+                        const lastResultHex = await window.ethereum.request({ 
+                            method: 'eth_call', 
+                            params: [{ to: contractAddress, data: lastResultData }, 'latest'] 
+                        });
+                        const result = contractInterface.decodeFunctionResult("lastResult", lastResultHex)[0];
+                        
+                        resultEl.innerText = result.toString();
+                        statusEl.innerText = "Quantum Waveform Collapsed.";
+                        rollBtn.disabled = false;
+                    }
+                } catch (e) {
+                    console.error("Polling error", e);
+                }
+            }, 2000);
+        }
+
+        // --- 4. Utilities ---
+
+        function waitForTransaction(txHash) {
+            return new Promise((resolve) => {
+                const interval = setInterval(async () => {
+                    try {
+                        const receipt = await window.ethereum.request({ method: 'eth_getTransactionReceipt', params: [txHash] });
+                        if (receipt) { clearInterval(interval); resolve(receipt); }
+                    } catch(e) { console.error(e); }
+                }, 2000);
+            });
+        }
+
+        // --- 5. INITIALIZATION (The Critical Step) ---
+        
+        function init() {
+            // Setup Interface
+            contractInterface = new ethers.utils.Interface(contractABI);
+
+            if (typeof window.ethereum !== 'undefined') {
+                // Listeners
+                window.ethereum.on('accountsChanged', handleAccountsChanged);
+                window.ethereum.on('chainChanged', () => window.location.reload());
+                
+                // Check if already connected
+                window.ethereum.request({ method: 'eth_accounts' })
+                    .then(handleAccountsChanged)
+                    .catch(err => console.error("Error fetching accounts:", err));
+            } else {
+                statusEl.innerText = "MetaMask Required.";
+                connectWalletBtn.disabled = true;
+            }
+        }
+
+        connectWalletBtn.addEventListener('click', connectWallet);
+        rollBtn.addEventListener('click', initiateRoll);
+        
+        // Start the engine
+        init();
+    </script>
+</body>
+</html>
