@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract QuantumBridge {
+    address public oracle;      // The wallet address of your Python script
+    uint256 public lastResult;  // The most recent quantum number
+    bool public isRolling;      // Status check to see if we are waiting for data
+
+    // Event: Use this to wake up your Python script
+    event RollRequested(address requester);
+    
+    // Event: Use this to tell the Frontend the number arrived
+    event RollFulfilled(uint256 result);
+
+    constructor() {
+        // The wallet that deploys this contract becomes the Oracle (Boss)
+        oracle = msg.sender;
+    }
+
+    // 1. The Frontend calls this function
+    function requestRoll() public {
+        isRolling = true;
+        emit RollRequested(msg.sender); // Shout to the Python script!
+    }
+
+    // 2. The Python script calls this function
+    function fulfillRoll(uint256 _number) public {
+        require(msg.sender == oracle, "Only the Oracle can fulfill this request.");
+        lastResult = _number;
+        isRolling = false;
+        emit RollFulfilled(_number); // Shout to the Frontend!
+    }
+}
